@@ -24,9 +24,11 @@ against a live local FalkorDB instance, and iterating on failures.
     INDEX FOR (n:Label) ON (n.attr) OPTIONS {...}`.
   - The GitHub `main` branch of `graphrag-sdk` is slightly ahead of the
     published PyPI release (1.4.0) actually installed — an `expected_errors=`
-    kwarg on `FalkorDBConnection.query()` that exists on `main` isn't in
-    1.4.0, and code written against the cloned `main` source failed at
-    runtime until corrected to match the installed version.
+    kwarg on `FalkorDBConnection.query()` and an `enable_cypher=` kwarg on
+    `GraphRAG.__init__()` both exist on `main` but not in 1.4.0, and code
+    written against the cloned `main` source failed at runtime (a
+    `TypeError: unexpected keyword argument`) until corrected to match the
+    installed version, twice, in two different modules.
   - A local port conflict was found and fixed: on this development machine,
     WSL2's own localhost-forwarding relay already occupies
     `127.0.0.1:6379`/`[::1]:6379` (serving a plain Redis inside the WSL

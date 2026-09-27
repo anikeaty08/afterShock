@@ -20,8 +20,7 @@ the design doc. `web/` (the report/ledger/ask/lab frontend) isn't built yet.
 
 | Piece | State |
 |---|---|
-| `core/` — graph access, ledger, evidence resolver, fact diff, impact tiers T1–T4, abstention-gated re-answer, two-stage judge | **Built, tested against a live FalkorDB** |
-| `core/ingest.py` — bootstrap / PR flow / merge flow orchestration | Not yet built |
+| `core/` — graph access, ledger, evidence resolver, fact diff, impact tiers T1–T4, abstention-gated re-answer, two-stage judge, bootstrap/PR-flow/merge-flow orchestration | **Built, tested against a live FalkorDB** (PR flow and merge flow proven end-to-end in `tests/test_ingest.py` / `tests/test_merge_flow.py`, LLM boundary faked — no key in this environment) |
 | `api/` — FastAPI app, GitHub webhook handler | Not yet built |
 | `mcp_server/` — `ask_docs` / `preview_impact` MCP tools | Not yet built |
 | `web/` — report page, ledger, ask, Replay Lab dashboard | Not yet built |
@@ -128,15 +127,22 @@ familiarity) — two syntax corrections came out of building this:
 ## Known SDK-version gotcha
 
 `core/` was built against `graphrag-sdk==1.4.0` (the published PyPI
-release). Its GitHub `main` branch is slightly ahead in a couple of places —
-notably, `main` adds an `expected_errors=` kwarg to
-`FalkorDBConnection.query()` that 1.4.0 doesn't have. `core/ledger.py`'s
-`ensure_indexes()` originally used it (copied from reading `main` for API
-reference) and failed with a `TypeError` at runtime; it now matches
-"already indexed" by message text instead. If you see an
-`unexpected keyword argument` error from a `graphrag_sdk` call, it's worth
-diffing the installed package against `main` before assuming the call
-itself is wrong.
+release). Its GitHub `main` branch is slightly ahead in a couple of places
+that looked like current API while reading the source for reference, but
+raised `TypeError: unexpected keyword argument` at runtime against the
+installed release:
+
+- `FalkorDBConnection.query()` on `main` takes an `expected_errors=` kwarg
+  that 1.4.0 doesn't have — `core/ledger.py`'s `ensure_indexes()` now
+  matches "already indexed" by message text instead.
+- `GraphRAG.__init__()` on `main` takes an `enable_cypher=` kwarg (the
+  text-to-Cypher retrieval path) that 1.4.0 doesn't have —
+  `core/ingest.py::build_rag()` leaves it out for now; worth adding back
+  once the SDK release that has it ships (see its docstring).
+
+If you see an `unexpected keyword argument` error from a `graphrag_sdk`
+call, it's worth diffing the installed package against `main` before
+assuming the call itself is wrong.
 
 ## AI usage
 
