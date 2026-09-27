@@ -1,2 +1,12 @@
 infra/
 .claude
+.venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+data/sdk-src/
+data/docs-corpus/
+node_modules/
+*.egg-info/
+.ruff_cache/

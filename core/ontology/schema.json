@@ -1,0 +1,31 @@
+{
+  "_comment": "Aftershock curated GraphSchema for the FalkorDB docs corpus (SYSTEM_DESIGN.md §7.1). Loaded as graphrag_sdk.Ontology via Ontology.model_validate_json(). Started from the SDK's ontology *discovery* output on a page sample, then hand-curated: merged near-duplicate proposed types, fixed relation directions, and added RELATED_TO as a deliberate catch-all so prose that doesn't fit a strict type is still captured instead of dropped. Entity ids are deterministic (name__type, lowercased/snake-cased) per graphrag_sdk.ingestion.extraction_strategies.entity_extractors.compute_entity_id — that's what makes a fact_key stable across GRAPH.COPY'd graphs (§6.2).",
+  "entities": [
+    {"label": "Product", "description": "A top-level FalkorDB product or surface: FalkorDB (core), FalkorDB Cloud, FalkorDB Enterprise, the GraphRAG SDK, or the Browser UI."},
+    {"label": "Command", "description": "A Redis-protocol command the FalkorDB module exposes, e.g. GRAPH.QUERY, GRAPH.RO_QUERY, GRAPH.COPY, GRAPH.CONFIG SET.", "properties": [{"name": "since_version", "type": "STRING", "description": "First version the command was available in, if the docs state it."}]},
+    {"label": "CypherFeature", "description": "An openCypher clause, function, or syntax feature FalkorDB implements or explicitly does not implement (e.g. MATCH, any(), list comprehension, UNWIND of maps)."},
+    {"label": "Algorithm", "description": "A built-in graph algorithm, e.g. PageRank, weakly connected components, shortest path."},
+    {"label": "ConfigParameter", "description": "A GRAPH.CONFIG parameter, e.g. MAX_QUEUED_QUERIES, TIMEOUT, RESULTSET_SIZE.", "properties": [{"name": "default_value", "type": "STRING", "description": "The documented default, if stated."}]},
+    {"label": "ClientLibrary", "description": "An official client library for a specific language, e.g. the Python, Node.js, Java, or Go client."},
+    {"label": "Integration", "description": "A third-party system or framework FalkorDB integrates with, e.g. LangChain, LlamaIndex, LiteLLM."},
+    {"label": "APIClass", "description": "A named class or entry point in the GraphRAG SDK's Python API, e.g. GraphRAG, Ontology, GraphSchema (legacy), KnowledgeGraph (legacy), Entity, Relation, EntityType (legacy)."},
+    {"label": "Concept", "description": "A technical concept or abstraction that isn't one of the more specific types above, e.g. multi-tenancy, vector index, full-text index, ontology discovery, abstention."},
+    {"label": "Limitation", "description": "A documented constraint, unsupported feature, or known gap."},
+    {"label": "Version", "description": "A released version or version range of a product, e.g. FalkorDB v1.2, GraphRAG SDK v1.4.0."}
+  ],
+  "relations": [
+    {"label": "SUPPORTS", "description": "The source provides or enables the target.", "patterns": [["Product", "Command"], ["Product", "Algorithm"], ["Product", "CypherFeature"], ["ClientLibrary", "Command"], ["Integration", "Product"]]},
+    {"label": "REQUIRES", "description": "The source cannot be used without the target.", "patterns": [["Command", "ConfigParameter"], ["Algorithm", "ConfigParameter"], ["Integration", "Product"], ["APIClass", "Product"]]},
+    {"label": "REPLACED_BY", "description": "The source is superseded by the target (a renamed class, a deprecated command, a new default). The single most important edge type for impact analysis: this is exactly what PR #479 created when it rewrote KnowledgeGraph -> GraphRAG.", "patterns": [["APIClass", "APIClass"], ["Command", "Command"], ["ConfigParameter", "ConfigParameter"], ["Algorithm", "Algorithm"]]},
+    {"label": "DEPRECATED_IN", "description": "The source was marked deprecated as of the target version.", "patterns": [["APIClass", "Version"], ["Command", "Version"], ["ConfigParameter", "Version"], ["CypherFeature", "Version"]]},
+    {"label": "INTRODUCED_IN", "description": "The source first became available in the target version.", "patterns": [["APIClass", "Version"], ["Command", "Version"], ["Algorithm", "Version"], ["CypherFeature", "Version"], ["ConfigParameter", "Version"]]},
+    {"label": "HAS_PARAMETER", "description": "The source command or class accepts the target configuration parameter.", "patterns": [["Command", "ConfigParameter"], ["APIClass", "ConfigParameter"]]},
+    {"label": "HAS_DEFAULT", "description": "The source parameter's documented default behavior or value, described as a concept when it isn't a bare literal.", "patterns": [["ConfigParameter", "Concept"]]},
+    {"label": "PART_OF_PRODUCT", "description": "The source ships as part of the target product.", "patterns": [["Command", "Product"], ["Algorithm", "Product"], ["ClientLibrary", "Product"], ["APIClass", "Product"], ["ConfigParameter", "Product"], ["CypherFeature", "Product"]]},
+    {"label": "INTEGRATES_WITH", "description": "The source and target interoperate (bidirectional in practice; extracted in whichever direction the text states it).", "patterns": [["Product", "Integration"], ["Integration", "Product"], ["ClientLibrary", "Integration"]]},
+    {"label": "LIMITED_BY", "description": "The source is constrained by the target documented limitation.", "patterns": [["Command", "Limitation"], ["CypherFeature", "Limitation"], ["Product", "Limitation"], ["Algorithm", "Limitation"]]},
+    {"label": "CONFIGURED_BY", "description": "The source's behavior is controlled by the target configuration parameter.", "patterns": [["Product", "ConfigParameter"], ["Command", "ConfigParameter"], ["Algorithm", "ConfigParameter"]]},
+    {"label": "RELATED_TO", "description": "A general, weaker relationship between two concepts that doesn't fit a more specific type above. Deliberate catch-all (curator's addition, not from discovery) so extraction doesn't silently drop true-but-unclassifiable prose relationships.", "patterns": [["Concept", "Concept"], ["Concept", "Product"], ["Product", "Concept"], ["APIClass", "Concept"], ["CypherFeature", "Concept"]]}
+  ],
+  "tables": []
+}
