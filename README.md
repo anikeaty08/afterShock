@@ -21,10 +21,10 @@ the design doc. `web/` (the report/ledger/ask/lab frontend) isn't built yet.
 | Piece | State |
 |---|---|
 | `core/` — graph access, ledger, evidence resolver, fact diff, impact tiers T1–T4, abstention-gated re-answer, two-stage judge, bootstrap/PR-flow/merge-flow orchestration | **Built, tested against a live FalkorDB** (PR flow and merge flow proven end-to-end in `tests/test_ingest.py` / `tests/test_merge_flow.py`, LLM boundary faked — no key in this environment) |
-| `api/` — FastAPI app, GitHub webhook handler | Not yet built |
-| `mcp_server/` — `ask_docs` / `preview_impact` MCP tools | Not yet built |
+| `api/` — FastAPI app (`/ask`, `/webhooks/github`, `/changesets/*`, `/impact/preview`, `/health`), GitHub App client, job runner | **Built and tested** (signature verification, event dispatch, changeset reads all exercised; `/ask` and `/impact/preview`'s pipeline is the same one `tests/test_ingest.py` covers end-to-end — no separate live-LLM test) |
+| `mcp_server/` — `ask_docs` / `preview_impact` MCP tools | **Built** (thin wrappers over the REST API above) |
 | `web/` — report page, ledger, ask, Replay Lab dashboard | Not yet built |
-| `eval/` — Replay Lab | Not yet built |
+| `eval/` — Replay Lab | Not yet built (`GET /replay/summary` says so rather than faking numbers) |
 
 ## Setup
 
@@ -72,6 +72,31 @@ fixture in `tests/conftest.py`. None of the currently-built tests need an
 LLM API key: the judge and re-answer tests fake out the LLM boundary, since
 graphrag_sdk's own `retrieve()`/`completion()`/`CosineReranker` are its
 tested responsibility, not ours to re-verify.
+
+## Running the API
+
+```bash
+.venv/Scripts/uvicorn api.main:app --reload   # Windows
+.venv/bin/uvicorn api.main:app --reload       # macOS/Linux
+```
+
+Endpoints: `POST /ask`, `POST /webhooks/github`, `GET /changesets/{id}`
+(+ `/graph`, `/events` SSE), `POST /impact/preview`, `GET /replay/summary`,
+`GET /health`. `/ask` and `/impact/preview` need `docs_main` bootstrapped
+and an LLM key in `.env` — neither has happened yet in this environment
+(see the status table above).
+
+### Aftershock's own MCP server (`mcp_server/`, §10.3)
+
+```bash
+AFTERSHOCK_API_URL=http://localhost:8000 python -m mcp_server.server
+```
+
+Exposes `ask_docs(question)` and `preview_impact(files)` as MCP tools —
+thin wrappers over the two endpoints above, for an MCP client (Claude Code,
+Cursor, ...) to check "what does my docs edit break?" before a PR exists.
+This is distinct from the FalkorDB MCP server below: that one is raw graph
+access, this one is the product.
 
 ## FalkorDB MCP server (raw graph access)
 

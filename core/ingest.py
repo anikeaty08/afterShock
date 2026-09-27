@@ -349,6 +349,7 @@ async def run_pr_flow(
     judge_llm: LiteLLM | None = None,
     on_stage: StageCallback = None,
     delete_scratch_when_done: bool = True,
+    persist: bool = True,
 ) -> PRFlowReport:
     """The core PR pipeline (§7.3's sequence diagram, steps 1-9).
 
@@ -362,6 +363,11 @@ async def run_pr_flow(
     override them in tests to keep everything else (GRAPH.COPY, fact diff,
     impact tiers, ledger writes) exercised against a real FalkorDB with zero
     LLM calls. See tests/test_ingest.py.
+
+    ``persist=False`` skips writing the ChangeSet/TOUCHES/IMPACTS edges —
+    used by ``POST /impact/preview`` (§10.1): a dry run on uncommitted
+    content has no real PR to attach a permanent ledger record to, and
+    shouldn't leave one behind in ``docs_main``.
     """
     settings = settings or get_settings()
     doc_ids = [*added, *modified, *deleted]
@@ -374,7 +380,14 @@ async def run_pr_flow(
     main = GraphHandle(settings.main_graph, settings)
     main_ledger = Ledger(main, settings)
     cs_id = changeset_id(pr, head_sha)
-    await main_ledger.set_changeset_status(cs_id, pr, head_sha, "running", "copy")
+
+    async def _set_status(stage: str, status: str = "running") -> None:
+        # Preview mode (persist=False) must leave no trace in docs_main —
+        # not even a transient "running" ChangeSet row.
+        if persist:
+            await main_ledger.set_changeset_status(cs_id, pr, head_sha, status, stage)
+
+    await _set_status("copy")
 
     _emit(on_stage, "copy")
     scratch_name = scratch_graph_name(pr, head_sha)
@@ -383,7 +396,7 @@ async def run_pr_flow(
 
     try:
         _emit(on_stage, "apply")
-        await main_ledger.set_changeset_status(cs_id, pr, head_sha, "running", "apply")
+        await _set_status("apply")
         rag_scratch = build_rag(scratch_name, settings=settings)
         apply_result = await apply_changes_fn(
             rag_scratch, added=added, modified=modified, deleted=deleted, root=checkout_root
@@ -392,17 +405,17 @@ async def run_pr_flow(
         _lap("apply")
 
         _emit(on_stage, "diff")
-        await main_ledger.set_changeset_status(cs_id, pr, head_sha, "running", "diff")
+        await _set_status("diff")
         diff: FactDiff = await diff_facts(main, scratch, doc_ids, embedder=rag_scratch.embedder, settings=settings)
         _lap("diff")
 
         _emit(on_stage, "impact")
-        await main_ledger.set_changeset_status(cs_id, pr, head_sha, "running", "impact")
+        await _set_status("impact")
         impact: ImpactResult = await compute_impact(main, diff, doc_ids, settings=settings)
         _lap("impact")
 
         _emit(on_stage, "re-answer")
-        await main_ledger.set_changeset_status(cs_id, pr, head_sha, "running", "re-answer")
+        await _set_status("re-answer")
         entries: list[ImpactReportEntry] = []
         for candidate in impact.candidates:
             entry = await _reanswer_and_judge(
@@ -431,17 +444,18 @@ async def run_pr_flow(
             }
             for e in entries
         ]
-        await main_ledger.persist_changeset(
-            cs_id=cs_id,
-            pr=pr,
-            base_sha=base_sha,
-            head_sha=head_sha,
-            doc_ids=doc_ids,
-            status="done",
-            timings=timings,
-            touches=touches,
-            impacts=impacts_payload,
-        )
+        if persist:
+            await main_ledger.persist_changeset(
+                cs_id=cs_id,
+                pr=pr,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                doc_ids=doc_ids,
+                status="done",
+                timings=timings,
+                touches=touches,
+                impacts=impacts_payload,
+            )
         _lap("post")
 
         return PRFlowReport(
@@ -460,7 +474,7 @@ async def run_pr_flow(
             timings_ms=timings,
         )
     except Exception:
-        await main_ledger.set_changeset_status(cs_id, pr, head_sha, "failed", "error")
+        await _set_status("error", "failed")
         raise
     finally:
         if delete_scratch_when_done:
