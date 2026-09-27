@@ -26,7 +26,6 @@ from dataclasses import dataclass, field
 from graphrag_sdk.core.models import RetrieverResult
 
 from core.graph import GraphHandle
-from core.textutil import normalize_whitespace
 
 logger = logging.getLogger(__name__)
 
@@ -160,22 +159,25 @@ async def resolve_evidence(graph: GraphHandle, retriever_result: RetrieverResult
             continue
 
         if section == "passages":
-            for doc_path, passage_text in parse_passage_blocks(item.content):
-                if doc_path:
-                    resolved.doc_ids.add(doc_path)
-                    prefix = normalize_whitespace(passage_text)[:_PASSAGE_PREFIX_CHARS]
-                    if not prefix:
-                        continue
-                    try:
-                        rows = await graph.rows_named(
-                            "q9_resolve_passage_to_chunk",
-                            {"doc_id": doc_path, "passage_prefix": prefix},
-                        )
-                    except Exception:
-                        logger.debug("Q9 passage resolution failed for %s", doc_path, exc_info=True)
-                        continue
-                    if rows:
-                        resolved.chunk_ids.add(rows[0][0])
+            for source, passage_text in parse_passage_blocks(item.content):
+                if not source:
+                    continue
+                # Raw prefix, not whitespace-normalised: Q9 is an exact
+                # CONTAINS against the stored chunk text.
+                prefix = passage_text.strip()[:_PASSAGE_PREFIX_CHARS]
+                try:
+                    rows = await graph.rows_named(
+                        "q9_resolve_passage_to_chunk",
+                        {"source": source, "passage_prefix": prefix},
+                    )
+                except Exception:
+                    logger.debug("Q9 passage resolution failed for %s", source, exc_info=True)
+                    continue
+                if rows:
+                    doc_id, chunk_id = rows[0]
+                    resolved.doc_ids.add(doc_id)
+                    if chunk_id:
+                        resolved.chunk_ids.add(chunk_id)
 
         elif section in ("facts", "relationships"):
             body = _HEADING_LINE_RE.sub("", item.content, count=1)

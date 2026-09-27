@@ -44,6 +44,17 @@ _CLOSE_COMPONENT_RE = re.compile(r"</([A-Z][A-Za-z0-9]*)\s*>")
 _STYLE_ATTR_RE = re.compile(r"""\s*style=\{\{.*?\}\}""", re.DOTALL)
 _BLANK_RUN_RE = re.compile(r"\n{3,}")
 
+# Jekyll-era docs (the FalkorDB/docs history the Replay Lab replays predates
+# the Mintlify move): Liquid tags wrap code tabs the way <CodeGroup> does
+# later — `{% capture python_0 %}` ... `{% endcapture %}` then
+# `{% include code_tabs.html ... %}`. Drop the tags, keep what they capture.
+# kramdown attribute lines (`{: .warning }`) are pure styling.
+_LIQUID_CAPTURE_OPEN_RE = re.compile(r"\{%-?\s*capture\s+([a-zA-Z]+)(?:_\d+)?\s*-?%\}")
+_LIQUID_CAPTURE_CLOSE_RE = re.compile(r"\{%-?\s*endcapture\s*-?%\}")
+_LIQUID_TAG_RE = re.compile(r"\{%-?.*?-?%\}", re.DOTALL)
+_LIQUID_OUTPUT_RE = re.compile(r"\{\{.*?\}\}", re.DOTALL)
+_KRAMDOWN_IAL_RE = re.compile(r"^\{:[^}\n]*\}[ \t]*$", re.MULTILINE)
+
 # Components whose `title=`/`header=` attribute is real content (an FAQ
 # question, a step name) worth keeping as a line of text, not just discarding
 # with the rest of the tag's attributes.
@@ -67,11 +78,18 @@ def _restore_code_fences(text: str, fences: list[str]) -> str:
 
 
 def clean_mdx(raw_body: str) -> str:
-    """Strip Mintlify JSX from an MDX body, keeping inner text and code.
+    """Strip Mintlify JSX (and Jekyll Liquid / kramdown) from a docs body, keeping inner text and code.
 
     Exposed as a standalone function (not just a private method) so it has a
     focused unit test independent of file I/O — see tests/test_mdx_loader.py.
     """
+    # Jekyll code tabs: `{% capture python_0 %}` ... `{% endcapture %}` holds
+    # *unfenced* code — left as-is, a `# Output:` comment inside it parses as
+    # an H1 and corrupts the heading breadcrumbs. Turn each capture into a
+    # real fence first, so it's protected like any other code block below.
+    raw_body = _LIQUID_CAPTURE_OPEN_RE.sub(lambda m: f"```{m.group(1)}", raw_body)
+    raw_body = _LIQUID_CAPTURE_CLOSE_RE.sub("```", raw_body)
+
     text, fences = _protect_code_fences(raw_body)
 
     # <img ... alt="..." /> -> a plain caption line, so alt text (often the
@@ -105,6 +123,10 @@ def clean_mdx(raw_body: str) -> str:
 
     # Defensive: a style={{...}} that survived on some other inline element.
     text = _STYLE_ATTR_RE.sub("", text)
+
+    text = _LIQUID_TAG_RE.sub("", text)
+    text = _LIQUID_OUTPUT_RE.sub("", text)
+    text = _KRAMDOWN_IAL_RE.sub("", text)
 
     text = _restore_code_fences(text, fences)
     text = _BLANK_RUN_RE.sub("\n\n", text)

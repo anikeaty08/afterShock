@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 CYPHER_DIR = Path(__file__).parent / "cypher"
 
+ONTOLOGY_GRAPH_SUFFIX = "__ontology"
+"""graphrag_sdk persists each data graph's ontology in a paired graph named
+``<data_graph>__ontology`` (storage/ontology_store.py). Copy and delete must
+treat the pair as one unit, or a deleted graph leaves a stale ontology behind
+that rejects the next run's (legitimately changed) ontology outright."""
+
 
 @lru_cache
 def _load_cypher_file(name: str) -> str:
@@ -107,13 +113,24 @@ class GraphHandle:
         admin = await self._ensure_admin()
         graph = admin.select_graph(self.graph_name)
         await graph.copy(dest_graph_name)
+        # Copy the paired ontology graph too, so the scratch graph evolves
+        # from exactly docs_main's registered ontology, not a fresh default.
+        existing = set(await admin.list_graphs())
+        src_onto = self.graph_name + ONTOLOGY_GRAPH_SUFFIX
+        if src_onto in existing:
+            await admin.select_graph(src_onto).copy(dest_graph_name + ONTOLOGY_GRAPH_SUFFIX)
         logger.info("GRAPH.COPY %s -> %s", self.graph_name, dest_graph_name)
         return GraphHandle(dest_graph_name, self._settings)
 
     async def delete(self) -> None:
-        """GRAPH.DELETE this graph (fast; safe to call on a graph that may
-        not exist — the SDK's ``delete_graph`` swallows the empty/invalid case)."""
+        """GRAPH.DELETE this graph and its paired ``__ontology`` graph (fast;
+        safe to call on a graph that may not exist — the SDK's
+        ``delete_graph`` swallows the empty/invalid case)."""
         await self._conn.delete_graph()
+        admin = await self._ensure_admin()
+        onto = self.graph_name + ONTOLOGY_GRAPH_SUFFIX
+        if onto in set(await admin.list_graphs()):
+            await admin.select_graph(onto).delete()
 
     async def exists(self) -> bool:
         admin = await self._ensure_admin()

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,10 +30,22 @@ class Settings(BaseSettings):
     # Two different model families for answer vs judge (§5, §9) so the judge
     # never grades a model against itself. Provider prefix follows LiteLLM's
     # ``provider/model`` convention; swap freely as long as the two differ.
-    answer_model: str = "openai/gpt-5.5-mini"
-    judge_model: str = "anthropic/claude-haiku-4-5"
-    embed_model: str = "openai/text-embedding-3-large"
+    answer_model: str = "bedrock/global.anthropic.claude-sonnet-4-6"
+    judge_model: str = "bedrock/global.amazon.nova-2-lite-v1:0"
+    embed_model: str = "bedrock/amazon.titan-embed-text-v2:0"
+    extract_model: str = "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
+    """Entity/relation extraction during ingest — by far the highest-volume
+    LLM use (several calls per chunk, every page), so a small fast model per
+    §12 ("a small, cheap model for extraction"). Answers use answer_model."""
     embed_dimensions: int = 256
+
+    ner_backend: str = "llm"
+    """Entity-recognition step of extraction: "llm" (LLMExtractor, the answer
+    model) or "gliner" (the SDK's default local GLiNER model via torch).
+    Defaults to "llm": GLiNER needs torch's native DLLs, which a Windows
+    Application Control policy blocks on the dev machine this was built on
+    (every chunk's NER step failed), and it keeps ingestion dependency-free
+    of a local model download."""
 
     llm_temperature: float = 0.0
     """Design §9 / §7.5: temperature 0 everywhere so ground truth is stable."""
@@ -100,8 +113,27 @@ class Settings(BaseSettings):
         return None
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _export_provider_env() -> None:
+    """LiteLLM reads provider credentials (AWS_BEARER_TOKEN_BEDROCK,
+    AWS_REGION_NAME, OPENAI_API_KEY, ...) from os.environ, but
+    pydantic-settings only maps .env keys onto Settings fields — it never
+    exports the rest. Load .env into the process environment too, without
+    overriding anything already set there (a real deployment's env wins)."""
+    from dotenv import load_dotenv
+
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+
+
 @lru_cache
 def get_settings() -> Settings:
     """Process-wide settings singleton. Tests override via monkeypatching env
     vars *before* first call, or by constructing ``Settings(...)`` directly."""
     return Settings()
+
+
+# At import, not inside get_settings(): code that constructs Settings(...)
+# directly (tests, scripts) must see provider credentials too.
+_export_provider_env()

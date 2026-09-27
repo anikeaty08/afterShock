@@ -27,8 +27,9 @@ from graphrag_sdk import (
     Ontology,
 )
 from graphrag_sdk.ingestion.chunking_strategies.structural_chunking import StructuralChunking
+from graphrag_sdk.ingestion.extraction_strategies.entity_extractors import LLMExtractor
+from graphrag_sdk.ingestion.extraction_strategies.graph_extraction import GraphExtraction
 from graphrag_sdk.ingestion.loaders.base import LoaderStrategy
-from graphrag_sdk.ingestion.loaders.markdown_loader import MarkdownLoader
 
 from core.config import Settings, get_settings
 from core.diff import FactDiff, diff_facts
@@ -69,8 +70,14 @@ def build_rag(
     *,
     ontology: Ontology | None = None,
     settings: Settings | None = None,
+    purpose: str = "answer",
 ) -> GraphRAG:
     """One GraphRAG instance, bound to one graph.
+
+    ``purpose="extract"`` uses ``settings.extract_model`` (ingest / update /
+    apply_changes — the high-volume path), ``"answer"`` uses
+    ``settings.answer_model`` (retrieval + generation). Both share the same
+    embedder, which is what the graph's stored vectors are tied to.
 
     Note: the design doc's Track 03 coverage table (§2) calls for enabling
     the SDK's text-to-Cypher retrieval path (``enable_cypher=True``) as the
@@ -88,7 +95,8 @@ def build_rag(
         password=settings.falkordb_password,
         graph_name=graph_name,
     )
-    llm = LiteLLM(model=settings.answer_model, temperature=settings.llm_temperature)
+    model = settings.extract_model if purpose == "extract" else settings.answer_model
+    llm = LiteLLM(model=model, temperature=settings.llm_temperature)
     embedder = LiteLLMEmbedder(model=settings.embed_model, dimensions=settings.embed_dimensions)
     return GraphRAG(
         connection=connection,
@@ -99,14 +107,27 @@ def build_rag(
     )
 
 
+def build_extractor(rag: GraphRAG, settings: Settings | None = None) -> GraphExtraction | None:
+    """Mirrors the SDK's own ``_default_extractor`` (GraphExtraction
+    constrained to the ontology's entity labels), swapping GLiNER NER for
+    LLMExtractor when ``settings.ner_backend == "llm"``. ``None`` means "let
+    the SDK use its own default" (gliner)."""
+    settings = settings or get_settings()
+    if settings.ner_backend != "llm":
+        return None
+    entity_types = [e.label for e in rag.ontology.entities] if rag.ontology.entities else None
+    return GraphExtraction(llm=rag.llm, entity_extractor=LLMExtractor(rag.llm), entity_types=entity_types)
+
+
 def _loader_for(path: Path) -> LoaderStrategy | None:
     """Per-extension loader override (§7.1 step 2). ``None`` lets the SDK's
     own per-extension auto-selection handle anything else (e.g. .csv tables)."""
-    suffix = path.suffix.lower()
-    if suffix == ".mdx":
+    # Both go through MDXLoader: its cleaning (front matter, JSX, Liquid,
+    # kramdown) is a no-op on plain Markdown, and Jekyll-era .md pages carry
+    # front matter + Liquid tags a bare MarkdownLoader would feed straight to
+    # the extractor.
+    if path.suffix.lower() in (".mdx", ".md"):
         return MDXLoader()
-    if suffix == ".md":
-        return MarkdownLoader()
     return None
 
 
@@ -155,13 +176,15 @@ async def bootstrap_ingest(
 
     summary = BootstrapSummary()
     sem = asyncio.Semaphore(max_concurrency)
+    extractor = build_extractor(rag)
 
     async def _one(path: Path) -> None:
         rel = path.relative_to(corpus_root).as_posix()
         async with sem:
             try:
                 result = await rag.ingest(
-                    str(path), document_id=rel, loader=_loader_for(path), chunker=_chunker_for(path)
+                    str(path), document_id=rel, loader=_loader_for(path),
+                    chunker=_chunker_for(path), extractor=extractor,
                 )
                 summary.ingested.append(rel)
                 summary.nodes_created += result.nodes_created
@@ -215,6 +238,7 @@ async def apply_pr_changes(
     by the caller after fetching blobs via the GitHub API).
     """
     result = ApplyChangesResult()
+    extractor = build_extractor(rag)
 
     del_sem = asyncio.Semaphore(update_concurrency)
 
@@ -240,6 +264,7 @@ async def apply_pr_changes(
                     if_missing="ingest",
                     loader=_loader_for(abs_path),
                     chunker=_chunker_for(abs_path),
+                    extractor=extractor,
                 )
                 result.modified.append(BatchEntry.ok(r))
             except Exception as exc:
@@ -254,7 +279,8 @@ async def apply_pr_changes(
         async with add_sem:
             try:
                 r = await rag.ingest(
-                    str(abs_path), document_id=rel, loader=_loader_for(abs_path), chunker=_chunker_for(abs_path)
+                    str(abs_path), document_id=rel, loader=_loader_for(abs_path),
+                    chunker=_chunker_for(abs_path), extractor=extractor,
                 )
                 result.added.append(BatchEntry.ok(r))
             except Exception as exc:
@@ -397,11 +423,12 @@ async def run_pr_flow(
     try:
         _emit(on_stage, "apply")
         await _set_status("apply")
-        rag_scratch = build_rag(scratch_name, settings=settings)
+        extract_rag = build_rag(scratch_name, settings=settings, purpose="extract")
         apply_result = await apply_changes_fn(
-            rag_scratch, added=added, modified=modified, deleted=deleted, root=checkout_root
+            extract_rag, added=added, modified=modified, deleted=deleted, root=checkout_root
         )
-        await rag_scratch.finalize()
+        await extract_rag.finalize()
+        rag_scratch = build_rag(scratch_name, settings=settings, purpose="answer")
         _lap("apply")
 
         _emit(on_stage, "diff")
@@ -561,11 +588,12 @@ async def run_merge_flow(
     main = GraphHandle(settings.main_graph, settings)
     ledger = Ledger(main, settings)
 
-    rag_main = build_rag(settings.main_graph, settings=settings)
+    extract_rag = build_rag(settings.main_graph, settings=settings, purpose="extract")
     apply_result = await apply_changes_fn(
-        rag_main, added=added, modified=modified, deleted=deleted, root=checkout_root
+        extract_rag, added=added, modified=modified, deleted=deleted, root=checkout_root
     )
-    await rag_main.finalize()
+    await extract_rag.finalize()
+    rag_main = build_rag(settings.main_graph, settings=settings, purpose="answer")
 
     rows = await main.rows_named("q21_changeset_impacts_for_merge", {"cs_id": changeset_id_})
     summary = MergeFlowSummary(pr=pr, apply_result=apply_result)
